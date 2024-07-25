@@ -31,6 +31,7 @@ android {
             proto {
                 srcDir '../proto/'
             }
+            jniLibs.srcDirs = ['src/main/jniLibs']
         }
     }
 
