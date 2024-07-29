@@ -677,7 +677,7 @@ class BufferTranscoder extends Encoder {
         }
         if (mDecodeDump) fo.close();
 
-        //Log.d(TAG, "Decoding done, leaving decoded: " + mStats.getDecodedFrameCount());
+                //Log.d(TAG, "Decoding done, leaving decoded: " + mStats.getDecodedFrameCount());
     }
 
     void submitFrameForDecoding(int trackIndex) {
@@ -853,54 +853,57 @@ class BufferTranscoder extends Encoder {
         return concatenated;
     }
 
-    /*
-    void getDecodedFrame() throws IOException {
-        int index;
-        index = mDecoder.dequeueOutputBuffer(info, (long) mFrameTimeUsec);
+    private String determinePixelFormat(MediaFormat format) {
+        int colorFormat = format.getInteger(MediaFormat.KEY_COLOR_FORMAT);
+        switch (colorFormat) {
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible:
+                return "yuv420p";
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_QCOM_FormatYUV420SemiPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_TI_FormatYUV420PackedSemiPlanar:
+                return "nv12";
+            /* TODO: Check with Saurabh if these are required? */
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV422Flexible:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV422Planar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV422PackedPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV422PackedSemiPlanar:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV422SemiPlanar:
+                return "yuv422";
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV444Flexible:
+            case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV444Interleaved:
+                return "yuv444";
+            default:
+                return "unknown";
+        }
+    }
 
-        if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
-            // no output available yet
-        } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-            if (Build.VERSION.SDK_INT >= 29) {
-                MediaFormat oformat = mDecoder.getOutputFormat();
-                latestFrameChanges = mediaFormatComparison(currentDecOutputFormat, oformat);
-                currentDecOutputFormat = oformat;
-            }
-            Log.d(TAG, "Media Format changed");
-        } else if(index >= 0) {
-            if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                decOutputExtractDone = true;
-                Log.d(TAG, "decOutputExtractDone is set to true in 'MediaCodec.BUFFER_FLAG_END_OF_STREAM' ");
-                submitFrameForEncoding(null, info);
-                Log.d(TAG, "Output EOS");
-                try {
-                    mDecoder.releaseOutputBuffer(index, 0);
-                } catch (IllegalStateException isx) {
-                    Log.e(TAG, "Illegal state exception when trying to release output buffers");
-                }
-            } else {
-                // Get the output buffer and wrap it in an Image object
-                Image image = mDecoder.getOutputImage(index);
-                if (image != null) {
-                    // Access the planes
-                    Image.Plane[] planes = image.getPlanes();
-                    // Ensure planes.length == 3 for YUV format (Y, U, V planes)
-                    if (planes.length == 3) {
-                        FrameInfo frameInfo = mStats.stopDecodingFrame(info.presentationTimeUs);
-                        frameInfo.addInfo(latestFrameChanges);
-                        latestFrameChanges = null;
-                        getYUVByteBuffers(planes, inpByteBuffArr, inpPlaneStride, mDecodeDump);
-                        byte[] yuvByteArray = convertPlanesToByteArray(planes);
-                    } else {
-                        Log.e(TAG, "Not supported colour format");
-                    }
-                }
-            }
+    public static byte[] extractYUVPlanes(byte[] yuvData, int width, int height, String format) {
+        int ySize = width * height;
+        int uvSize;
+
+        byte[] concatenatedPlanes;
+        if ("yuv420p".equalsIgnoreCase(format)) {
+            uvSize = width * height / 4;
+            concatenatedPlanes = new byte[ySize + 2 * uvSize];
+
+            System.arraycopy(yuvData, 0, concatenatedPlanes, 0, ySize);
+            System.arraycopy(yuvData, ySize, concatenatedPlanes, ySize, uvSize);
+            System.arraycopy(yuvData, ySize + uvSize, concatenatedPlanes, ySize + uvSize, uvSize);
+        } else if ("nv12".equalsIgnoreCase(format) || "nv21".equalsIgnoreCase(format)) {
+            uvSize = width * height / 2;
+            concatenatedPlanes = new byte[ySize + uvSize];
+
+            System.arraycopy(yuvData, 0, concatenatedPlanes, 0, ySize);
+            System.arraycopy(yuvData, ySize, concatenatedPlanes, ySize, uvSize); // UV interleaved plane
+        } else {
+            throw new IllegalArgumentException("Unsupported YUV format: " + format);
         }
 
-        return yuvByteArray;
+        return concatenatedPlanes;
     }
-    */
 
     void getDecodedFrameAndSubmitForEncoding(byte[] headerArray, MediaMuxer muxer,
                                              MediaCodec.BufferInfo bufferInfo, int videoTrackIndex) throws IOException {
@@ -930,64 +933,59 @@ class BufferTranscoder extends Encoder {
                     Log.e(TAG, "Illegal state exception when trying to release output buffers");
                 }
             } else {
-                // Get the output buffer and wrap it in an Image object
-                Image image = mDecoder.getOutputImage(index);
-                if (image != null) {
-                    // Access the planes
-                    Image.Plane[] planes = image.getPlanes();
-                    // Ensure planes.length == 3 for YUV format (Y, U, V planes)
-                    if (planes.length == 3) {
-                        FrameInfo frameInfo = mStats.stopDecodingFrame(info.presentationTimeUs);
-                        frameInfo.addInfo(latestFrameChanges);
-                        latestFrameChanges = null;
-                        getYUVByteBuffers(planes, inpByteBuffArr, inpPlaneStride, mDecodeDump);
-                    } else {
-                        Log.e(TAG, "Not supported colour format");
-                    }
+                ByteBuffer outputBuffer = mDecoder.getOutputBuffer(index);
+                if (outputBuffer != null) {
+                    MediaFormat outputFormat = mDecoder.getOutputFormat();
+                    String colourSpace = determinePixelFormat(outputFormat);
+                    byte[] yuvData = new byte[info.size];
+                    outputBuffer.get(yuvData);
+                    int outWidth = outputFormat.getInteger(MediaFormat.KEY_WIDTH);
+                    int outHeight = outputFormat.getInteger(MediaFormat.KEY_HEIGHT);
+                    //int colorFormat = outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT);
+                    //colourSpace = determinePixelFormat(colorFormat);
+
+                    FrameInfo frameInfo = mStats.stopDecodingFrame(info.presentationTimeUs);
+                    frameInfo.addInfo(latestFrameChanges);
+                    latestFrameChanges = null;
 
                     if (encInpSubmitDone & (mInFramesCount==(framesWritten + 1))) {
                         encOutputExtractDone = true;
                     }
 
                     if ("encoder.x264".equals(mTest.getConfigure().getCodec())) {
-                        int frameSize = inpBitstreamFrWidth * inpBitstreamFrHeight * 3 / 2;
-                        int outputBufferSize;
+                        //int frameSize = inpBitstreamFrWidth * inpBitstreamFrHeight * 3 / 2;
+                        int frameSize = outWidth * outHeight * 3 / 2;
+                        int encodedBufferSize;
 
-                        byte[] outputBuffer = new byte[frameSize];
+                        byte[] encodedBuffer = new byte[frameSize];
 
-                        boolean flagHeaderSize = true;
-                        byte[] yuvByteArray = convertPlanesToByteArray(planes);
+                        byte[] yuvByteArray = extractYUVPlanes(yuvData, outWidth, outHeight, colourSpace);
 
-                        String colourSpace = mTest.getEncoderX264().getColorSpace();
-                        outputBufferSize = x264Encode(yuvByteArray, outputBuffer, inpBitstreamFrWidth, inpBitstreamFrHeight, colourSpace, findIDRInstance);
-                        Log.d(TAG,"outputBufferSize: " + outputBufferSize);
+                        //String colourSpace = mTest.getEncoderX264().getColorSpace();
+                        encodedBufferSize = x264Encode(yuvByteArray, encodedBuffer, outWidth, outHeight, colourSpace, findIDRInstance);
+                        Log.d(TAG,"encodedBufferSize: " + encodedBufferSize);
 
-                        ByteBuffer buffer = ByteBuffer.wrap(outputBuffer);
-                        bufferInfo.offset = 0;
-                        bufferInfo.size = outputBufferSize;
-                        bufferInfo.presentationTimeUs = computePresentationTimeUsec(mFramesAdded, mRefFrameTime);
-                        //if (findIDRInstance.checkIDR) {
-                            bufferInfo.flags = MediaCodec.BUFFER_FLAG_KEY_FRAME;
-                        //} else {
-                        //    bufferInfo.flags = 0;
-                        //}
+                        ByteBuffer buffer = ByteBuffer.wrap(encodedBuffer);
+                        bufferInfo.offset = info.offset;
+                        bufferInfo.size = encodedBufferSize;
+                        bufferInfo.presentationTimeUs = info.presentationTimeUs;
+                        if (findIDRInstance.checkIDR) {
+                        bufferInfo.flags = MediaCodec.BUFFER_FLAG_KEY_FRAME;
+                        } else {
+                            bufferInfo.flags = 0;
+                        }
 
                         if(muxer != null) {
                             buffer.position(bufferInfo.offset);
                             buffer.limit(bufferInfo.offset + bufferInfo.size);
 
                             muxer.writeSampleData(videoTrackIndex, buffer, bufferInfo);
-                            //if(flagHeaderSize)
-                            //    fileOutputStream2.write(headerArray, 0, sizeOfHeader);
-                            //fileOutputStream.write(buffer.array(), 0, outputBufferSize);
                         }
                         framesWritten++;
-                        flagHeaderSize = false;
                         encInpSubmitDone = true;
                     }
                 }
                 try {
-                    image.close();
                     mDecoder.releaseOutputBuffer(index, 0);
                 } catch (IllegalStateException isx) {
                     Log.e(TAG, "Illegal state exception when trying to release output buffers");

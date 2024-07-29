@@ -176,9 +176,8 @@ int X264Encoder::encode(JNIEnv *env, jobject thisObj, jbyteArray yuvBuffer, jbyt
 
     int frame_size = x264_encoder_encode(encoder, &nal, &nnal, &pic_in, &pic_out);
 
-    int total_size = 2;
+    int total_size = 0;
     if (frame_size > 0) {
-        // TODO: Added total_size = 2 for debugging purpose
         for (int i = 0; i < nnal; i++) {
             if (nal[i].i_type == NAL_SLICE_IDR) {
                 checkIDR = true;
@@ -195,7 +194,7 @@ int X264Encoder::encode(JNIEnv *env, jobject thisObj, jbyteArray yuvBuffer, jbyt
         env->SetBooleanField(x264FindIDRObj, checkIDRFieldID, checkIDR);
         jbyte *out_buffer_data = env->GetByteArrayElements(out_buffer, NULL);
 
-        int offset = 2;
+        int offset = 0;
         for (int i = 0; i < nnal; i++) {
             if (nal[i].i_type == NAL_SPS || nal[i].i_type == NAL_PPS || nal[i].i_type == NAL_SEI ||
             nal[i].i_type == NAL_AUD || nal[i].i_type == NAL_FILLER) {
