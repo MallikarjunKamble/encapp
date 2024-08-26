@@ -5,13 +5,17 @@ test {
     }
     input {
         filepath: "camera"
-        resolution: "1280x720"
+        resolution: "1920x1080"
         framerate: 30
         playout_frames: 300
     }
     configure {
-        codec: "OMX.google.h264.encoder"
+        codec: "c2.unisoc.avc.encoder"
         bitrate: "1000 kbps"
         surface: true
+        #no_pq: 1,3 and pq: 6, 6
+        color_standard: 6
+        color_transfer: 6
+        color_range: 2
     }
 }

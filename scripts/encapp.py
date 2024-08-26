@@ -32,6 +32,9 @@ import signal
 SCRIPT_ROOT_DIR = os.path.abspath(
     os.path.join(encapp_tool.app_utils.SCRIPT_DIR, os.pardir)
 )
+SCRIPT_PROTO_DIR = os.path.abspath(
+    os.path.join(encapp_tool.app_utils.SCRIPT_DIR, "proto")
+)
 sys.path.append(SCRIPT_ROOT_DIR)
 import proto_tool.tests_pb2 as tests_definitions  # noqa: E402
 
@@ -176,7 +179,7 @@ def wait_for_exit(serial, debug=0):
         state = "Running"
         while state == "Running":
             time.sleep(1)
-            # ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(f"idb list-apps  --fetch-process-state  --udid {serial} | grep Meta.Encapp")
+            # ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(f"idb list-apps  --fetch-process-state  --udid {serial} | grep {encapp_tool.adb_cmds.IDB_BUNDLE_ID}")
             # state = stdout.split("|")[4].strip()
             # Since the above does not work (not state info), let us look for the lock file
             if not encapp_tool.adb_cmds.file_exists_in_device("running.lock", serial):
@@ -204,13 +207,21 @@ def run_encapp_test(protobuf_txt_filepath, serial, device_workdir, debug):
     if encapp_tool.adb_cmds.USE_IDB:
         # remove log file first
         ret, _, stderr = encapp_tool.adb_cmds.run_cmd(
-            f"idb file rm Documents/encapp.log --udid {serial} Meta.Encapp ",
+            f"idb file rm Documents/encapp.log --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} ",
             debug,
         )
-        ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
-            f"idb launch --udid {serial} Meta.Encapp " f"test {protobuf_txt_filepath}",
-            debug,
-        )
+        if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} "
+                f"test {protobuf_txt_filepath}",
+                debug,
+            )
+        else:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} "
+                f"test {protobuf_txt_filepath}",
+                debug,
+            )
     else:
         # clean the logcat first
         encapp_tool.adb_cmds.reset_logcat(serial)
@@ -234,7 +245,7 @@ def collect_results(
         # There seems to be somethign fishy here which causes files to show up late
         # Not a problem if running a single file but multiple is a problem. Sleep...
         time.sleep(2)
-        cmd = f"idb file ls {device_workdir}/ --udid {serial} --bundle-id Meta.Encapp"
+        cmd = f"idb file ls {device_workdir}/ --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
     else:
         cmd = f"adb -s {serial} shell ls {device_workdir}/"
     ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(cmd, debug)
@@ -243,7 +254,14 @@ def collect_results(
     )
     if encapp_tool.adb_cmds.USE_IDB:
         # Set app in standby so screen is not locked
-        cmd = (f"idb launch --udid {serial} Meta.Encapp standby",)
+        if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+            cmd = (
+                f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} standby",
+            )
+        else:
+            cmd = (
+                f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} standby",
+            )
         encapp_tool.adb_cmds.run_cmd(cmd, debug)
     if debug > 0:
         print(f"outputfiles: {len(output_files)}")
@@ -263,7 +281,7 @@ def collect_results(
             continue
         # pull the output file
         if encapp_tool.adb_cmds.USE_IDB:
-            cmd = f"idb file pull {device_workdir}/{file} {local_workdir} --udid {serial} --bundle-id Meta.Encapp"
+            cmd = f"idb file pull {device_workdir}/{file} {local_workdir} --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
         else:
             cmd = f"adb -s {serial} pull {device_workdir}/{file} " f"{local_workdir}"
         encapp_tool.adb_cmds.run_cmd(cmd, debug)
@@ -274,33 +292,35 @@ def collect_results(
         encapp_tool.adb_cmds.run_cmd(cmd, debug)
         # append results file (json files) to final results
         if file.strip().endswith(".json"):
-            total_cpu_usage = 0
-            
-            with open(os.path.join(local_workdir, file.strip()), 'r') as f:
-                data = json.load(f)
-            cpu_data = data.get("cpu_data", {})
-            # calculate average CPU usage for each process
-            for process, cpu_usages in process_cpu_usage.items():
-                avg_cpu_usage = 0
-                avg_cpu_usage = sum(cpu_usages) / len(cpu_usages)
-                process_cpu_usage[process].append(avg_cpu_usage)
-                total_cpu_usage += avg_cpu_usage
-                cpu_data[process] = f"{avg_cpu_usage:.2f}%"
-
-            cpu_data["Total_cpu_usage"] = f"{total_cpu_usage:.2f}%"
-            data["cpu_data"] = cpu_data
+            if(len(process_cpu_usage) != 0):
                 
-            with open(os.path.join(local_workdir, file.strip()), 'w') as f:
-                    json.dump(data, f, indent=2)
+                total_cpu_usage = 0
+                
+                with open(os.path.join(local_workdir, file.strip()), 'r') as f:
+                    data = json.load(f)
+                cpu_data = data.get("cpu_data", {})
+                # calculate average CPU usage for each process
+                for process, cpu_usages in process_cpu_usage.items():
+                    avg_cpu_usage = 0
+                    avg_cpu_usage = sum(cpu_usages) / len(cpu_usages)
+                    process_cpu_usage[process].append(avg_cpu_usage)
+                    total_cpu_usage += avg_cpu_usage
+                    cpu_data[process] = f"{avg_cpu_usage:.2f}%"
+
+                cpu_data["Total_cpu_usage"] = f"{total_cpu_usage:.2f}%"
+                data["cpu_data"] = cpu_data
                     
-            # avg_cpu = {key: values[-1] for key, values in process_cpu_usage.items()}    
+                with open(os.path.join(local_workdir, file.strip()), 'w') as f:
+                        json.dump(data, f, indent=2)
+                        
+                # avg_cpu = {key: values[-1] for key, values in process_cpu_usage.items()}    
             
             path, tmpname = os.path.split(file)
             result_json.append(os.path.join(local_workdir, tmpname))
         
     # remove/process the test file
     if encapp_tool.adb_cmds.USE_IDB:
-        cmd = f"idb file pull {device_workdir}/{protobuf_txt_filepath} {local_workdir} --udid {serial} --bundle-id Meta.Encapp"
+        cmd = f"idb file pull {device_workdir}/{protobuf_txt_filepath} {local_workdir} --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
     else:
         cmd = f"adb -s {serial} shell rm " f"{device_workdir}/{protobuf_txt_filepath}"
     encapp_tool.adb_cmds.run_cmd(cmd, debug)
@@ -311,15 +331,21 @@ def collect_results(
     # get logcat
     result_ok = False
     if encapp_tool.adb_cmds.USE_IDB:
-        cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id Meta.Encapp"
+        cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
         encapp_tool.adb_cmds.run_cmd(cmd, debug)
         # Release the app
         encapp_tool.app_utils.force_stop(serial)
         # Remove test output files
-        ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
-            f"idb launch --udid {serial} Meta.Encapp reset",
-            debug,
-        )
+        if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} reset",
+                debug,
+            )
+        else:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} reset",
+                debug,
+            )
         # TODO: checks on ios
         result_ok = True
         return result_ok, result_json
@@ -667,19 +693,30 @@ def update_media(test, options):
     replace = getattr(options, "replace", {})
     input_repl = replace.get("input", {})
     out_pix_fmt = input_repl.get("pix_fmt", in_pix_fmt)
+
+    # if there are not settings for res and rate check the file itself
+    info = encapp_tool.ffutils.get_video_info(test.input.filepath, options.debug)
+    if len(in_res) == 0:
+        in_res = f"{info['width']}x{info['height']}"
+    if in_rate <= 0:
+        in_rate = info["framerate"]
     if len(out_res) == 0:
         out_res = in_res
     if out_rate == 0:
         out_rate = in_rate
 
     if (
-        encapp_tool.ffutils.video_is_raw(test.input.filepath)
-        or encapp_tool.ffutils.video_is_y4m(test.input.filepath)
-    ) and (
-        in_res != out_res
-        or in_rate != out_rate
-        or (in_pix_fmt != out_pix_fmt and out_pix_fmt is not None)
-    ):
+        (
+            encapp_tool.ffutils.video_is_raw(test.input.filepath)
+            or encapp_tool.ffutils.video_is_y4m(test.input.filepath)
+        )
+        and (
+            in_res != out_res
+            or in_rate != out_rate
+            or (in_pix_fmt != out_pix_fmt and out_pix_fmt is not None)
+        )
+    ) or options.raw:  # Always decode
+
         # one more thing to check, if nv21 or rgba only transcode if source is y4m
         if (
             (
@@ -700,6 +737,9 @@ def update_media(test, options):
             reason = f" rate ({in_rate} != {out_rate})"
         if in_pix_fmt != out_pix_fmt:
             reason = f" pix_fmt ({in_pix_fmt} != {out_pix_fmt})"
+        if options.raw:
+            reason = "Always decode to raw set"
+
         reason = reason.strip()
         if options.debug > 0:
             print(f"Transcode raw input: {test.input.filepath} {reason = }")
@@ -708,7 +748,16 @@ def update_media(test, options):
         output = {}
         basename = os.path.basename(test.input.filepath)
 
-        input["pix_fmt"] = tests_definitions.Input.PixFmt.Name(in_pix_fmt)
+        if in_res == "":
+            in_res = f"{info.get('width', -1)}x{info.get('height')}"
+        if in_rate == "":
+            in_rate = info.get("framerate")
+        if out_res == "":
+            out_res = in_res
+        if out_rate == "":
+            out_rate = in_rate
+
+        input["pix_fmt"] = tests_definitions.PixFmt.Name(in_pix_fmt)
         input["resolution"] = in_res
         input["framerate"] = in_rate
 
@@ -725,26 +774,46 @@ def update_media(test, options):
 
         output["resolution"] = out_res
         output["framerate"] = out_rate
-        output["pix_fmt"] = get_pix_fmt(out_pix_fmt)
+        output["pix_fmt"] = out_pix_fmt
 
+        stride = ""
+        if (options.width_align > 0) or (options.height_align > 0):
+            width = int(out_res.split("x")[0])
+            height = int(out_res.split("x")[1])
+            wa = options.width_align if options.width_align > 0 else 1
+            ha = options.height_align if options.height_align > 0 else 1
+            if width % wa != 0:
+                width = (width // wa + 1) * wa
+            if height % ha:
+                height = (height // ha + 1) * ha
+            output["hstride"] = width
+            output["vstride"] = height
+            stride = f"str.{output['hstride']}x{output['vstride']}"
         extension = "raw"
         if output["pix_fmt"] == "rgba":
             extension = "rgba"
         pix_fmt_id = out_pix_fmt if out_pix_fmt is not None else in_pix_fmt
         if str(pix_fmt_id).isnumeric():
-            pix_fmt = tests_definitions.Input.PixFmt.Name(pix_fmt_id)
+            pix_fmt = tests_definitions.PixFmt.Name(pix_fmt_id)
         else:
             pix_fmt = pix_fmt_id
+
         output["output_filepath"] = (
-            f"{options.mediastore}/{basename}_{out_res}p{round(out_rate, 2)}_{pix_fmt}.{extension}"
+            f"{options.mediastore}/{basename}_{out_res}p{round(out_rate, 2)}_{pix_fmt}"
         )
+        if len(stride) > 0:
+            output["output_filepath"] += f"_{stride}"
+
+        output["output_filepath"] += f".{extension}"
         output["pix_fmt"] = pix_fmt
         replace["input"] = input
         replace["output"] = output
 
-        d = process_input_path(test.input.filepath, replace, test.input)
+        d = process_input_path(test.input.filepath, replace, test.input, options.debug)
         # now both config and input should be the same i.e. matching config
         test.input.resolution = d["resolution"]
+        # TODO: JOHAN - when to do this?
+        test.configure.resolution = d["resolution"]
         test.input.framerate = d["framerate"]
         test.input.pix_fmt = d["pix_fmt"]  # ???? PIX_FMT_TYPES_VALUES[d["pix_fmt"]]
         test.input.filepath = d["filepath"]
@@ -823,7 +892,7 @@ def update_codec_test(
                 val = bool(val)
             # convert enum strings to integer
             if k1 == "input" and k2 == "pix_fmt":
-                val = tests_definitions.Input.PixFmt.Value(val)
+                val = tests_definitions.PixFmt.Value(val)
             if k1 == "configure" and k2 == "bitrate_mode":
                 val = tests_definitions.Configure.BitrateMode.Value(val)
             if k1 == "configure" and k2 == "color_standard":
@@ -837,7 +906,7 @@ def update_codec_test(
                     # create the Message field
                     getattr(test, k1).SetInParent()
             except:
-                print(f"Something is wrong with {k1}, {k2} - {val}")
+                print(f"Something could be wrong with {k1}, {k2} - {val}")
                 continue
             setattr(getattr(test, k1), k2, val)
 
@@ -852,7 +921,37 @@ def update_codec_test(
             input["pix_fmt"] = "nv21"
             options["input"] = input
         """
-        d = process_input_path(test.input.filepath, options, test.input)
+
+        info = encapp_tool.ffutils.get_video_info(test.input.filepath)
+        replace["output"] = {}
+        if "configure" in replace:
+            replace["output"]["resolution"] = (
+                replace["configure"]["resolution"]
+                if "resolution" in replace["configure"]
+                and len(replace["configure"]["resolution"]) > 0
+                else (
+                    test.configure.resolution
+                    if len(test.configure.resolution) > 0
+                    else f"{info['width']}x{info['height']}"
+                )
+            )
+            replace["output"]["framerate"] = (
+                replace["configure"]["framerate"]
+                if "framerate" in replace["configure"]
+                else (
+                    test.configure.framerate
+                    if test.configure.framerate > 0
+                    else info["framerate"]
+                )
+            )
+            replace["output"]["pix_fmt"] = replace.get("input", {}).get(
+                "pix_fmt", PREFERRED_PIX_FMT
+            )
+        else:
+            replace["output"]["resolution"] = test.configure.resolution
+            replace["output"]["framerate"] = test.configure.framerate
+            replace["output"]["pix_fmt"] = test.input.pix_fmt
+        d = process_input_path(test.input.filepath, replace, test.input, 1)
         test.input.resolution = d["resolution"]
         test.input.framerate = d["framerate"]
         test.input.pix_fmt = PIX_FMT_TYPES_VALUES[d["pix_fmt"]]
@@ -997,7 +1096,7 @@ def run_codec_tests(
         device_workdir = default_values["device_workdir"]
 
     os.makedirs(local_workdir, exist_ok=True)
-
+    process_cpu_usage = {}
     collected_results = []
     # run the test(s)
     if split:
@@ -1029,14 +1128,14 @@ def run_codec_tests(
                 ):
                     abort_test(local_workdir, f"Error copying {filepath} to {serial}")
                 print(f"Push test defs: lw = {local_workdir}")
-                if not encapp_tool.adb_cmds.push_file_to_device(
-                    f"{local_workdir}/{test.common.id}.pbtxt",
-                    serial,
-                    device_workdir,
-                    fast_copy,
-                    debug,
-                ):
-                    abort_test(local_workdir, f"Error copying {filepath} to {serial}")
+            if not encapp_tool.adb_cmds.push_file_to_device(
+                f"{local_workdir}/{test.common.id}.pbtxt",
+                serial,
+                device_workdir,
+                fast_copy,
+                debug,
+            ):
+                abort_test(local_workdir, f"Error copying {test.common.id}.pbtxt to {serial}")
 
             if encapp_tool.adb_cmds.USE_IDB:
                 protobuf_txt_filepath = f"{test.common.id}.pbtxt"
@@ -1047,7 +1146,7 @@ def run_codec_tests(
             stop_event, monitor_thread, cpu_usage_file = start_cpu_monitoring(serial, cpu_usage_file, debug)
             run_encapp_test(protobuf_txt_filepath, serial, device_workdir, debug)
             # end cpu usage capture
-            process_cpu_usage = stop_and_save_cpu_monitoring(stop_event, monitor_thread, cpu_usage_file)
+            stop_and_save_cpu_monitoring(stop_event, monitor_thread, process_cpu_usage, cpu_usage_file)
 
             with open(tests_run, "a") as passed:
                 passed.write(f"{test.common.id}.pbtxt\n")
@@ -1058,7 +1157,7 @@ def run_codec_tests(
                     "Currently filesystem synch on ios seems to be slow, sleep a little while"
                 )
                 time.sleep(1)
-                cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id Meta.Encapp"
+                cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
                 encapp_tool.adb_cmds.run_cmd(cmd, debug)
                 try:
                     os.rename(
@@ -1078,7 +1177,14 @@ def run_codec_tests(
         # (b) one pbtxt for all tests
         # push all the files to the device workdir
         if encapp_tool.adb_cmds.USE_IDB:
-            cmd = f"idb launch --udid {serial} Meta.Encapp standby"
+            if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+                cmd = (
+                    f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} standby",
+                )
+            else:
+                cmd = (
+                    f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} standby",
+                )
             encapp_tool.adb_cmds.run_cmd(cmd)
         protobuf_txt_filepath = ""
 
@@ -1111,7 +1217,7 @@ def run_codec_tests(
                 "Currently filesystem synch on ios seems to be slow, sleep a little while"
             )
             time.sleep(1)
-            cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id Meta.Encapp"
+            cmd = f"idb file pull {device_workdir}/encapp.log {local_workdir} --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
             encapp_tool.adb_cmds.run_cmd(cmd, debug)
             try:
                 os.rename(
@@ -1124,7 +1230,7 @@ def run_codec_tests(
             return None, None
         collected_results.extend(
             collect_results(
-                local_workdir, protobuf_txt_filepath, serial, device_workdir, debug
+                local_workdir, protobuf_txt_filepath, serial, device_workdir, debug, process_cpu_usage
             )
         )
     return collected_results
@@ -1154,7 +1260,7 @@ def signal_handler():
 
 signal.signal(signal.SIGINT, signal_handler)
 
-def stop_and_save_cpu_monitoring(stop_event, monitor_thread, cpu_usage_file):
+def stop_and_save_cpu_monitoring(stop_event, monitor_thread, process_cpu_usage, cpu_usage_file):
     stop_event.set()
     monitor_thread.join()
     
@@ -1162,8 +1268,7 @@ def stop_and_save_cpu_monitoring(stop_event, monitor_thread, cpu_usage_file):
         data = f.read()
 
     lines = data.split('\n')
-    process_names = ["com.facebook.en", "media.swcodec", "media.codec"]
-    process_cpu_usage = {}
+    process_names = ["com.facebook.en", "media.swcodec", "media.codec", "media.unisoc.co"]
     pids = {}
     for line in lines:
         for process_name in process_names:
@@ -1185,11 +1290,19 @@ def list_codecs(serial, model, device_workdir, debug=0):
     model_clean = model.replace(" ", "_")
     filename = f"codecs_{serial}.txt"
     if encapp_tool.adb_cmds.USE_IDB:
-        cmd = {f"idb launch --udid {serial} Meta.Encapp list_codecs"}
+        if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+            cmd = {
+                f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} list_codecs"
+            }
+        else:
+            cmd = (
+                f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} list_codecs",
+            )
+        # cmd = {f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} list_codecs"}
         ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(cmd, debug)
         assert ret, 'error getting codec list: "%s"' % stdout
         # for some bizzare reason if using a destination a directory is created...
-        cmd = f"idb file pull {device_workdir}/codecs.txt . --udid {serial} --bundle-id Meta.Encapp"
+        cmd = f"idb file pull {device_workdir}/codecs.txt . --udid {serial} --bundle-id {encapp_tool.adb_cmds.IDB_BUNDLE_ID}"
         ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(cmd, debug)
 
         cmd = f"mv codecs.txt {filename}"
@@ -1301,6 +1414,36 @@ def codec_test(options, model, serial, debug):
         local_workdir = (
             f"{options.desc.replace(' ', '_')}_{model.replace(' ', '_')}_{dt_string}"
         )
+
+    # Create local_workdir
+    if not os.path.exists(local_workdir):
+        os.mkdir(local_workdir)
+    if len(options.configfile) > 1:
+        # merge the protobuf files
+        # First file will be the base
+        # For later definitions on the first test will be merged
+        # to all of the tests in the first prototbuf
+        # TODO: should parallels be considered?
+        test_suite = None
+        for proto in options.configfile:
+            tmp = tests_definitions.TestSuite()
+            with open(proto, "rb") as fd:
+                text_format.Merge(fd.read(), tmp)
+            if test_suite is None:
+                test_suite = tmp
+            elif len(test_suite.test):
+                for test in test_suite.test:
+                    if test is not None:
+                        test.MergeFrom(tmp.test[0])
+            else:
+                print("ERROR, first config file lacks a test")
+        basename = os.path.basename(options.configfile[0])
+        options.configfile = f"{local_workdir}/{basename}"
+        with open(options.configfile, "w") as f:
+            f.write(text_format.MessageToString(test_suite))
+    else:
+        options.configfile = options.configfile[0]
+
     if options.mediastore is None:
         options.mediastore = local_workdir
     # check the protobuf text is correct
@@ -1503,7 +1646,7 @@ def get_options(argv):
     parser.add_argument(
         "configfile",
         type=str,
-        nargs="?",
+        nargs="*",
         default=default_values["configfile"],
         metavar="input-config-file",
         help="input configuration file",
@@ -1551,6 +1694,35 @@ def get_options(argv):
         default=False,
         help="Do not execute the tests. Just prepare the test(s).",
     )
+    parser.add_argument(
+        "--bundleid",
+        type=str,
+        default=None,
+        help="Implicitly it will turn on IDB option",
+    )
+    parser.add_argument(
+        "--width_align",
+        type=int,
+        default=-1,
+        help="Horizontal widht alignment in bits to calculate stride and add padding if converting to raw yuv",
+    )
+    parser.add_argument(
+        "--height_align",
+        type=int,
+        default=-1,
+        help="Vertical height alignment in bits to calculate and add padding if converting to raw yuv",
+    )
+    parser.add_argument(
+        "--dim_align",
+        type=int,
+        default=None,
+        help="Horizontal and vertical alignment in bits to calculate stride and add padding if converting to raw yuv",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Always decode to raw format before pushing to device",
+    )
 
     options = parser.parse_args(argv[1:])
     options.desc = "testing"
@@ -1569,6 +1741,9 @@ def get_options(argv):
 
 def process_options(options):
     # 0. Set device type and workdir
+    if options.bundleid:
+        encapp_tool.adb_cmds.set_bundleid(options.bundleid)
+        options.idb = True
     encapp_tool.adb_cmds.set_idb_mode(options.idb)
     default_values["device_workdir"] = get_device_dir()
 
@@ -1616,6 +1791,9 @@ def process_options(options):
             if os.path.exists(videofile)
             else f"file {videofile} is not readable"
         )
+    if options.dim_align:
+        options.width_align = options.dim_align
+        options.height_align = options.dim_align
 
     # 4. derive replace values
     if "input" in options.replace and "filepath" in options.replace["input"]:
@@ -1624,6 +1802,7 @@ def process_options(options):
         if input_filepath != "camera" and encapp_tool.ffutils.video_is_y4m(
             input_filepath
         ):
+
             # replace input and other derived values
             d = process_input_path(input_filepath, options.replace, options.debug)
             if "input" in options:
@@ -1636,6 +1815,10 @@ def process_options(options):
                 options.pix_fmt = d["pix_fmt"]
             if "extension" in options:
                 options.extension = d["extension"]
+    # 5. check mediastore
+    if options.mediastore:
+        if not os.path.exists(options.mediastore):
+            os.mkdir(options.mediastore)
     return options
 
 
@@ -1659,32 +1842,43 @@ def verify_app_version(json_files):
 
 
 def process_input_path(input_filepath, replace, test_input, debug=0):
-    # Raw input?
+    replace = replace.copy()
+    if replace is None:
+        print("Process input path with no replacement settings")
+        # TODO: just return? or throw error?
+    if "output" not in replace:
+        print("No output settings in replacement")
+        if "configure" in replace:
+            replace["output"] = replace["configure"]
+
+    # check whether the user has a preferred raw format
+    pix_fmt = replace.get("output", {}).get("pix_fmt", PREFERRED_PIX_FMT)
+    resolution = replace.get("output", {}).get("resolution", "")
+    framerate = replace.get("output", {}).get("framerate", -1)
+    extension = "yuv"
+
+    if "hstride" in replace.get("output", {}) and "vstride" in replace.get(
+        "output", {}
+    ):
+        # Need to replace width and height in the test definitions
+        resolution = f"{replace['output']['hstride']}x{replace['output']['vstride']}"
+    output_filepath = replace.get("output", {}).get(
+        "output_filepath",
+        f"{input_filepath}_{resolution}p{framerate}_{pix_fmt}.{extension}",
+    )
+    # get raw filepath
+    output_filepath = os.path.join(
+        tempfile.gettempdir(), os.path.basename(output_filepath)
+    )
+    if debug > 0:
+        print("***********")
+        print("input file will be transcoded")
+        print(f"resolution:  -> {resolution}")
+        print(f"framerate:  -> {framerate}")
+        print(f"pix_fmt: -> {pix_fmt}")
+        print("***********")
+
     if encapp_tool.ffutils.video_is_raw(input_filepath):
-        settings = {}
-        settings["pix_fmt"] = replace.get("output", {}).get(
-            "pix_fmt", replace.get("input", {}).get("pix_fmt")
-        )
-        settings["resolution"] = replace.get("output", {}).get(
-            "resolution", replace.get("input", {}).get("resolution")
-        )
-        settings["framerate"] = replace.get("output", {}).get(
-            "framerate", replace.get("input", {}).get("framerate")
-        )
-
-        if debug > 0:
-            print("***********")
-            print(f"raw input file {input_filepath} will be transcoded")
-            print(f"resolution:  -> {settings['resolution']}")
-            print(f"framerate:  -> {settings['framerate']}")
-            print(f"pix_fmt: -> {settings['pix_fmt'] =}")
-            print("***********")
-            print(f"{replace}")
-        output_filepath = replace.get("output", {}).get(
-            "output_filepath",
-            f"{input_filepath}_{settings['resolution']}p{settings['framerate']}_{settings['pix_fmt']}.raw",
-        )
-
         # lazy but let us skip transcodig if the target is already there...
         if not os.path.exists(output_filepath):
             encapp_tool.ffutils.ffmpeg_transcode_raw(
@@ -1694,80 +1888,24 @@ def process_input_path(input_filepath, replace, test_input, debug=0):
                 debug,
             )
         else:
-            print("Warning, transcoded file exists, assuming it is correct")
-        # replace input and other derived values
-        return {
-            "filepath": output_filepath,
-            "resolution": settings["resolution"],
-            "pix_fmt": settings["pix_fmt"],
-            "framerate": settings["framerate"],
-        }
+            print(
+                f"Warning, transcoded file {output_filepath} exists, assuming it is correct"
+            )
 
     else:
-        # decode encoded video (the encoder wants raw video)
-        videofile_config = encapp_tool.ffutils.get_video_info(input_filepath)
-
-        # First check if we have settings in the test
-        resolution = None
-        framerate = None
-        pix_fmt = None
-
-        if test_input:
-            if test_input.resolution:
-                resolution = test_input.resolution
-            if test_input.framerate:
-                framerate = test_input.framerate
-            if test_input.pix_fmt:
-                pix_fmt = get_pix_fmt(test_input.pix_fmt)
-
-        if replace is not None:
-            # check whether the user has a preferred raw format
-            pix_fmt = replace.get("input", {}).get("pix_fmt", PREFERRED_PIX_FMT)
-            resolution = f'{videofile_config["width"]}x{videofile_config["height"]}'
-            # TODO: why not framerate?
-            framerate = videofile_config["framerate"]
-            extension = PIX_FMT_TYPES[pix_fmt]
-        else:
-            if not pix_fmt:
-                pix_fmt = PREFERRED_PIX_FMT
-
-            if not resolution:
-                resolution = f"{videofile_config['width']}x{videofile_config['height']}"
-            if not framerate:
-                framerate = videofile_config["framerate"]
-            extension = PIX_FMT_TYPES[pix_fmt]
-
-        # get raw filepath
-        input_filepath_raw = os.path.join(
-            tempfile.gettempdir(), os.path.basename(input_filepath)
-        )
-        input_filepath_raw += f".{resolution}"
-        input_filepath_raw += f".{framerate}"
-        input_filepath_raw += f".{pix_fmt}"
-        input_filepath_raw += f".{extension}"
-        if debug > 0:
-            print("***********")
-            print("input file will be transcoded")
-            print(f"resolution:  -> {resolution}")
-            print(f"framerate:  -> {framerate}")
-            print(f"pix_fmt: -> {pix_fmt}")
-            print("***********")
-
         encapp_tool.ffutils.ffmpeg_convert_to_raw(
             input_filepath,
-            input_filepath_raw,
-            pix_fmt,
-            resolution,
-            videofile_config["framerate"],
+            output_filepath,
+            replace,
             debug,
         )
         # replace input and other derived values
-        return {
-            "filepath": input_filepath_raw,
-            "resolution": resolution,
-            "pix_fmt": pix_fmt,
-            "framerate": framerate,
-        }
+    return {
+        "filepath": output_filepath,
+        "resolution": resolution,
+        "pix_fmt": pix_fmt,
+        "framerate": framerate,
+    }
 
 
 def main(argv):
@@ -1811,9 +1949,14 @@ def main(argv):
     if options.func == "reset":
         print("Removes all encapp_* files in target folder")
         # idb is to slow so let us use the app
-        ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
-            f"idb launch --udid {serial} Meta.Encapp reset"
-        )
+        if encapp_tool.adb_cmds.IOS_MAJOR_VERSION < 17:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"idb launch --udid {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} reset"
+            )
+        else:
+            ret, stdout, stderr = encapp_tool.adb_cmds.run_cmd(
+                f"xcrun devicectl device process launch --device {serial} {encapp_tool.adb_cmds.IDB_BUNDLE_ID} reset",
+            )
         return
 
     if options.func == "pull_result":
@@ -1845,8 +1988,8 @@ def main(argv):
 
         # if not options.ignore_results:
         #     verify_app_version(result_json)
-        if not result_ok:
-            sys.exit(-1)
+        # if not result_ok:
+        #     sys.exit(-1)
 
 
 if __name__ == "__main__":

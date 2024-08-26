@@ -212,7 +212,7 @@ class SurfaceEncoder extends Encoder {
         }
 
         Log.d(TAG, "Create muxer");
-        mMuxer = createMuxer(mCodec, mCodec.getOutputFormat(), true);
+        mMuxer = createMuxer(mCodec, mCodec.getOutputFormat(), false);
 
 
         // This is needed.
